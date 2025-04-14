@@ -30,16 +30,16 @@ bool setTimeMode = false;
 unsigned long lastDebounce[3] = {0, 0, 0};
 bool buttonState[3] = {HIGH, HIGH, HIGH};
 bool lastButtonState[3] = {HIGH, HIGH, HIGH};
-const unsigned long debounceDelay = 200;
+const unsigned long debounceDelay = 300; // Increased debounce delay
 
 // Servo
 Servo alarmServo;
 
 void setup() {
   Serial.begin(9600);
-  pinMode(BUTTON_HOUR, INPUT_PULLUP);
-  pinMode(BUTTON_MINUTE, INPUT_PULLUP);
-  pinMode(BUTTON_MODE, INPUT_PULLUP);
+  pinMode(BUTTON_HOUR, INPUT_PULLUP);  // Set as INPUT_PULLUP for internal pull-up resistor
+  pinMode(BUTTON_MINUTE, INPUT_PULLUP); // Set as INPUT_PULLUP for internal pull-up resistor
+  pinMode(BUTTON_MODE, INPUT_PULLUP);  // Set as INPUT_PULLUP for internal pull-up resistor
   pinMode(BUZZER_PIN, OUTPUT);
 
   alarmServo.attach(SERVO_PIN);
@@ -54,7 +54,7 @@ void setup() {
 
   if (rtc.lostPower()) {
     Serial.println("RTC lost power, setting default time.");
-    rtc.adjust(DateTime(2025, 1, 1, 0, 0, 0));
+    rtc.adjust(DateTime(2025, 4, 14, 12, 48, 0));  // Set to 12:48 PM once
   }
 
   DateTime now = rtc.now();
@@ -82,20 +82,24 @@ void checkButtons() {
   for (int i = 0; i < 3; i++) {
     bool reading = digitalRead(buttonPins[i]);
 
+    // If the button state has changed, reset debounce timer
     if (reading != lastButtonState[i]) {
-      lastDebounce[i] = millis();
+      lastDebounce[i] = millis();  // Store the current time as the debounce timer start
     }
 
+    // Check if enough time has passed to consider the button state stable
     if ((millis() - lastDebounce[i]) > debounceDelay) {
+      // If the button state has changed and is stable, update buttonState
       if (reading != buttonState[i]) {
-        buttonState[i] = reading;
+        buttonState[i] = reading; // Update the state of the button
 
+        // Only take action if the button is pressed (LOW state)
         if (buttonState[i] == LOW) {
-          // Button was just pressed
+          // Action based on which button is pressed
           switch (i) {
             case 0: // HOUR
               if (setTimeMode) {
-                currentHour = (currentHour % 12) + 1;
+                currentHour = (currentHour + 1) % 24;  // Increment hour, loop back to 0 after 23
                 Serial.print("Hour set to: ");
                 Serial.println(currentHour);
               }
@@ -103,7 +107,7 @@ void checkButtons() {
 
             case 1: // MINUTE
               if (setTimeMode) {
-                currentMinute = (currentMinute + 1) % 60;
+                currentMinute = (currentMinute + 1) % 60;  // Increment minute, loop back to 0 after 59
                 Serial.print("Minute set to: ");
                 Serial.println(currentMinute);
               }
@@ -116,7 +120,7 @@ void checkButtons() {
               if (!setTimeMode) {
                 // Save new time to RTC with current date
                 DateTime now = rtc.now();
-                rtc.adjust(DateTime(now.year(), now.month(), now.day(), currentHour % 24, currentMinute, 0));
+                rtc.adjust(DateTime(now.year(), now.month(), now.day(), currentHour, currentMinute, 0));
                 Serial.println("Time saved to RTC.");
               }
               break;
@@ -124,7 +128,14 @@ void checkButtons() {
         }
       }
     }
-    lastButtonState[i] = reading;
+    lastButtonState[i] = reading; // Store the current button state for the next loop iteration
+
+    // Debugging: Print button press status
+    if (buttonState[i] == LOW) {
+      Serial.print("Button ");
+      Serial.print(i);
+      Serial.println(" Pressed");
+    }
   }
 }
 
@@ -157,7 +168,6 @@ void stopAlarm() {
   alarmServo.write(0);
   alarmTriggered = false;
 }
-
-
+   
 
 
