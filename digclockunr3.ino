@@ -1,173 +1,230 @@
-#include <TM1637Display.h>
-#include <Servo.h>
 #include <Wire.h>
 #include <RTClib.h>
+#include <TM1637Display.h>
+#include <Servo.h>
 
-// Display
-#define CLK 6
-#define DIO 7
+// Define the TM1637 display pins
+const int CLK = 6;  
+const int DIO = 7;  
+
+
 TM1637Display display(CLK, DIO);
 
-// RTC
+// Define the servo pin
+const int servoPin = 8; 
+Servo myServo;
+
+// Define button pins
+const int setTimeButtonPin = 13;
+const int incrementButtonPin = A0;
+const int decrementButtonPin = A1;
+
+// Debounce delay (milliseconds)
+const int debounceDelay = 50;
+
+// Time setting mode flag
+bool settingTime = false;
+
+// Alarm time variables
+int alarmHour = 7;  // Default alarm hour
+int alarmMinute = 0; // Default alarm minute
+bool alarmSet = false;
+
 RTC_DS3231 rtc;
 
-// Pins
-#define BUTTON_HOUR   2
-#define BUTTON_MINUTE 3
-#define BUTTON_MODE   4
-#define BUZZER_PIN    5
-#define SERVO_PIN     9
+// Variables for non-blocking alarm indication
+unsigned long alarmStartTime = 0;
+bool alarmActive = false;
 
-// Timekeeping
-int currentHour = 0;
-int currentMinute = 0;
-bool alarmTriggered = false;
-bool alarmOn = true;
-unsigned long snoozeUntil = 0;
-bool setTimeMode = false;
-
-// Button Debouncing
-unsigned long lastDebounce[3] = {0, 0, 0};
-bool buttonState[3] = {HIGH, HIGH, HIGH};
-bool lastButtonState[3] = {HIGH, HIGH, HIGH};
-const unsigned long debounceDelay = 300; // Increased debounce delay
-
-// Servo
-Servo alarmServo;
+static int setTimeButtonState = 0; // Keep track of button state
+static int alarmMode = 0; // 0: Set Time, 1: Set Alarm, 2: Alarm Enabled
+static unsigned long lastButtonPressTime = 0; // Time of last increment/decrement press
+static const unsigned long timeSettingTimeout = 5000; // 5 seconds
 
 void setup() {
+  // Initialize serial communication
   Serial.begin(9600);
-  pinMode(BUTTON_HOUR, INPUT_PULLUP);  // Set as INPUT_PULLUP for internal pull-up resistor
-  pinMode(BUTTON_MINUTE, INPUT_PULLUP); // Set as INPUT_PULLUP for internal pull-up resistor
-  pinMode(BUTTON_MODE, INPUT_PULLUP);  // Set as INPUT_PULLUP for internal pull-up resistor
-  pinMode(BUZZER_PIN, OUTPUT);
 
-  alarmServo.attach(SERVO_PIN);
-  alarmServo.write(0);
-
-  display.setBrightness(0x0f);
-
-  if (!rtc.begin()) {
+  // Initialize the RTC
+  if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
-    while (1);
+    Serial.flush();
+    abort();
   }
 
-  if (rtc.lostPower()) {
-    Serial.println("RTC lost power, setting default time.");
-    rtc.adjust(DateTime(2025, 4, 14, 12, 48, 0));  // Set to 12:48 PM once
-  }
+  // Set the time if the RTC is not running (uncomment the following lines to set the time)
+  // rtc.adjust(DateTime(2023, 10, 27, 12, 34, 56)); // Year, Month, Day, Hour, Minute, Second
 
-  DateTime now = rtc.now();
-  currentHour = now.hour();
-  currentMinute = now.minute();
+  // Set the pin modes for the button pins
+  pinMode(setTimeButtonPin, INPUT_PULLUP);
+  pinMode(incrementButtonPin, INPUT_PULLUP);
+  pinMode(decrementButtonPin, INPUT_PULLUP);
+
+  // Initialize the TM1637 display
+  display.setBrightness(2); 
+
+  // Attach the servo
+  myServo.attach(servoPin);
+
 }
+
+// Function declaration (prototype) - IMPORTANT
+void triggerAlarm(int hours, int minutes);
 
 void loop() {
-  unsigned long currentMillis = millis();
+  // Get the current time from the RTC
+  DateTime now = rtc.now();
 
-  if (!setTimeMode) {
-    DateTime now = rtc.now();
-    currentHour = now.hour();
-    currentMinute = now.minute();
+  // Extract the hours, minutes, and seconds
+  int hours = now.hour();
+  int minutes = now.minute();
+  //int seconds = now.second();
+
+  // Check for button presses
+  checkButtons(hours, minutes);
+
+  // Format the time for display (HH:MM)
+  int displayValue = hours * 100 + minutes; // Combine hours and minutes for display
+
+  // Check if the alarm should be triggered
+  if (alarmSet && hours == alarmHour && minutes == alarmMinute && !alarmActive) {
+    alarmActive = true;
+    alarmStartTime = millis();
+    triggerAlarm(hours, minutes); // Pass hours and minutes to triggerAlarm
   }
 
-  checkButtons();
-  updateDisplay();
-  checkAlarm(currentMillis);
+  // Check if the alarm indication time has elapsed
+  if (alarmActive && (millis() - alarmStartTime) >= 5000) {
+    alarmActive = false;
+    alarmSet = false; // Disable the alarm after indication
+  }
+
+  // Display the time on the TM1637 display (only if the alarm is not active)
+  if (!alarmActive) {
+    display.showNumberDec(displayValue, true); // Show with leading zeros
+  }
+
+
+  // Wait for a short period
+  delay(10);
 }
 
-void checkButtons() {
-  int buttonPins[3] = {BUTTON_HOUR, BUTTON_MINUTE, BUTTON_MODE};
+// Function to check for button presses and handle time setting
+void checkButtons(int &hours, int &minutes) {
+  static int setTimeButtonState = 0; // Keep track of button state
+  static int alarmMode = 0; // 0: Set Time, 1: Set Alarm, 2: Alarm Enabled
+  static unsigned long lastButtonPressTime = 0; // Time of last increment/decrement press
+  static const unsigned long timeSettingTimeout = 5000; // 5 seconds
 
-  for (int i = 0; i < 3; i++) {
-    bool reading = digitalRead(buttonPins[i]);
+  // Set Time Button
+  if (digitalRead(setTimeButtonPin) == LOW) {
+    delay(debounceDelay);
+    if (digitalRead(setTimeButtonPin) == LOW) {
+      alarmMode = (alarmMode + 1) % 3; // Cycle through modes
+      Serial.print("Alarm Mode: "); Serial.println(alarmMode); // Debug
 
-    // If the button state has changed, reset debounce timer
-    if (reading != lastButtonState[i]) {
-      lastDebounce[i] = millis();  // Store the current time as the debounce timer start
+      switch (alarmMode) {
+        case 0: // Setting Current Time
+          settingTime = true;
+          alarmSet = false;
+          break;
+        case 1: // Setting Alarm Time (Alarm Disabled)
+          settingTime = false;
+          alarmSet = false;
+          break;
+        case 2: // Alarm Enabled
+          settingTime = false;
+          alarmSet = true;
+          break;
+      }
+      lastButtonPressTime = millis(); // Reset timeout on mode change
+      while (digitalRead(setTimeButtonPin) == LOW); // Wait for release
     }
+  }
 
-    // Check if enough time has passed to consider the button state stable
-    if ((millis() - lastDebounce[i]) > debounceDelay) {
-      // If the button state has changed and is stable, update buttonState
-      if (reading != buttonState[i]) {
-        buttonState[i] = reading; // Update the state of the button
-
-        // Only take action if the button is pressed (LOW state)
-        if (buttonState[i] == LOW) {
-          // Action based on which button is pressed
-          switch (i) {
-            case 0: // HOUR
-              if (setTimeMode) {
-                currentHour = (currentHour + 1) % 24;  // Increment hour, loop back to 0 after 23
-                Serial.print("Hour set to: ");
-                Serial.println(currentHour);
-              }
-              break;
-
-            case 1: // MINUTE
-              if (setTimeMode) {
-                currentMinute = (currentMinute + 1) % 60;  // Increment minute, loop back to 0 after 59
-                Serial.print("Minute set to: ");
-                Serial.println(currentMinute);
-              }
-              break;
-
-            case 2: // MODE
-              setTimeMode = !setTimeMode;
-              Serial.println(setTimeMode ? "Set Time Mode ON" : "Set Time Mode OFF");
-
-              if (!setTimeMode) {
-                // Save new time to RTC with current date
-                DateTime now = rtc.now();
-                rtc.adjust(DateTime(now.year(), now.month(), now.day(), currentHour, currentMinute, 0));
-                Serial.println("Time saved to RTC.");
-              }
-              break;
+  // Increment Button
+  if (digitalRead(incrementButtonPin) == LOW) {
+    delay(debounceDelay);
+    if (digitalRead(incrementButtonPin) == LOW) {
+      if (settingTime) {
+        minutes++;
+        if (minutes >= 60) {
+          minutes = 0;
+          hours++;
+          if (hours >= 24) {
+            hours = 0;
           }
         }
+        rtc.adjust(DateTime(rtc.now().year(), rtc.now().month(), rtc.now().day(), hours, minutes, 0)); // Update RTC
+        lastButtonPressTime = millis(); // Reset timeout
+      } else {
+        // Increment alarm time
+        alarmMinute++;
+        if (alarmMinute >= 60) {
+          alarmMinute = 0;
+          alarmHour++;
+          if (alarmHour >= 24) {
+            alarmHour = 0;
+          }
+        }
+        //alarmSet = true; // Enable the alarm - REMOVED
       }
+      while (digitalRead(incrementButtonPin) == LOW); // Wait for release
     }
-    lastButtonState[i] = reading; // Store the current button state for the next loop iteration
+  }
 
-    // Debugging: Print button press status
-    if (buttonState[i] == LOW) {
-      Serial.print("Button ");
-      Serial.print(i);
-      Serial.println(" Pressed");
+  // Decrement Button
+  if (digitalRead(decrementButtonPin) == LOW) {
+    delay(debounceDelay);
+    if (digitalRead(decrementButtonPin) == LOW) {
+      if (settingTime) {
+        minutes--;
+        if (minutes < 0) {
+          minutes = 59;
+          hours--;
+          if (hours < 0) {
+            hours = 23;
+          }
+        }
+        rtc.adjust(DateTime(rtc.now().year(), rtc.now().month(), rtc.now().day(), hours, minutes, 0)); // Update RTC
+        lastButtonPressTime = millis(); // Reset timeout
+      } else {
+        // Decrement alarm time
+        alarmMinute--;
+        if (alarmMinute < 0) {
+          alarmMinute = 59;
+          hours--;
+          if (hours < 0) {
+            hours = 23;
+          }
+        }
+        
+      }
+      while (digitalRead(decrementButtonPin) == LOW); // Wait for release
     }
+  }
+
+  // Check for timeout and exit setting mode
+  if (settingTime && (millis() - lastButtonPressTime > timeSettingTimeout)) {
+    settingTime = false; // Exit setting mode
+    alarmMode = 1; // Go to alarm setting mode
+    Serial.println("Timeout: Exiting time setting mode.");
   }
 }
 
-void updateDisplay() {
-  int hourToShow = currentHour % 12;
-  if (hourToShow == 0) hourToShow = 12;
-
-  int displayTime = hourToShow * 100 + currentMinute;
-  display.showNumberDecEx(displayTime, 0b01000000, true); // HH:MM
-}
-
-void checkAlarm(unsigned long currentMillis) {
-  if (!alarmOn || alarmTriggered || currentMillis < snoozeUntil) return;
-
-  DateTime now = rtc.now();
-  if (now.hour() == currentHour && now.minute() == currentMinute && now.second() == 0) {
-    triggerAlarm();
+// Function to trigger the alarm 
+void triggerAlarm(int hours, int minutes) { // Receive hours and minutes
+  Serial.println("ALARM!");
+  
+  for (int i = 0; i < 5; i++) { // Blink 5 times
+    display.clear(); // Turn off the display
+    delay(250);
+    int displayValue = hours * 100 + minutes;
+    display.showNumberDec(displayValue, true); // Show the time
+    delay(250);
   }
+
+  myServo.write(90); // Move to 90 degrees
+  delay(1000);
+  myServo.write(0);  // Move back to 0 degrees
 }
-
-void triggerAlarm() {
-  digitalWrite(BUZZER_PIN, HIGH);
-  alarmServo.write(90);
-  alarmTriggered = true;
-  Serial.println("Alarm Triggered!");
-}
-
-void stopAlarm() {
-  digitalWrite(BUZZER_PIN, LOW);
-  alarmServo.write(0);
-  alarmTriggered = false;
-}
-   
-
-
