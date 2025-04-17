@@ -5,13 +5,14 @@
 
 // Define the TM1637 display pins
 const int CLK = 6;  
-const int DIO = 7;  
+const int DIO = 7; 
 
-
+// Create a TM1637Display object
 TM1637Display display(CLK, DIO);
 
 // Define the servo pin
 const int servoPin = 8; 
+// Create a Servo object
 Servo myServo;
 
 // Define button pins
@@ -30,6 +31,7 @@ int alarmHour = 7;  // Default alarm hour
 int alarmMinute = 0; // Default alarm minute
 bool alarmSet = false;
 
+// Create an RTC object
 RTC_DS3231 rtc;
 
 // Variables for non-blocking alarm indication
@@ -40,6 +42,7 @@ static int setTimeButtonState = 0; // Keep track of button state
 static int alarmMode = 0; // 0: Set Time, 1: Set Alarm, 2: Alarm Enabled
 static unsigned long lastButtonPressTime = 0; // Time of last increment/decrement press
 static const unsigned long timeSettingTimeout = 5000; // 5 seconds
+
 
 void setup() {
   // Initialize serial communication
@@ -52,9 +55,7 @@ void setup() {
     abort();
   }
 
-  // Set the time if the RTC is not running (uncomment the following lines to set the time)
-  // rtc.adjust(DateTime(2023, 10, 27, 12, 34, 56)); // Year, Month, Day, Hour, Minute, Second
-
+  
   // Set the pin modes for the button pins
   pinMode(setTimeButtonPin, INPUT_PULLUP);
   pinMode(incrementButtonPin, INPUT_PULLUP);
@@ -66,6 +67,10 @@ void setup() {
   // Attach the servo
   myServo.attach(servoPin);
 
+  // Initialize lastButtonPressTime
+  lastButtonPressTime = millis();
+
+  
 }
 
 // Function declaration (prototype) - IMPORTANT
@@ -78,7 +83,7 @@ void loop() {
   // Extract the hours, minutes, and seconds
   int hours = now.hour();
   int minutes = now.minute();
-  //int seconds = now.second();
+ 
 
   // Check for button presses
   checkButtons(hours, minutes);
@@ -105,7 +110,6 @@ void loop() {
   }
 
 
-  // Wait for a short period
   delay(10);
 }
 
@@ -147,6 +151,7 @@ void checkButtons(int &hours, int &minutes) {
     delay(debounceDelay);
     if (digitalRead(incrementButtonPin) == LOW) {
       if (settingTime) {
+        // Setting Current Time
         minutes++;
         if (minutes >= 60) {
           minutes = 0;
@@ -157,7 +162,7 @@ void checkButtons(int &hours, int &minutes) {
         }
         rtc.adjust(DateTime(rtc.now().year(), rtc.now().month(), rtc.now().day(), hours, minutes, 0)); // Update RTC
         lastButtonPressTime = millis(); // Reset timeout
-      } else {
+      } else if (alarmMode == 1) {
         // Increment alarm time
         alarmMinute++;
         if (alarmMinute >= 60) {
@@ -167,7 +172,6 @@ void checkButtons(int &hours, int &minutes) {
             alarmHour = 0;
           }
         }
-        //alarmSet = true; // Enable the alarm - REMOVED
       }
       while (digitalRead(incrementButtonPin) == LOW); // Wait for release
     }
@@ -178,6 +182,7 @@ void checkButtons(int &hours, int &minutes) {
     delay(debounceDelay);
     if (digitalRead(decrementButtonPin) == LOW) {
       if (settingTime) {
+        // Setting Current Time
         minutes--;
         if (minutes < 0) {
           minutes = 59;
@@ -188,17 +193,16 @@ void checkButtons(int &hours, int &minutes) {
         }
         rtc.adjust(DateTime(rtc.now().year(), rtc.now().month(), rtc.now().day(), hours, minutes, 0)); // Update RTC
         lastButtonPressTime = millis(); // Reset timeout
-      } else {
+      } else if (alarmMode == 1) {
         // Decrement alarm time
         alarmMinute--;
         if (alarmMinute < 0) {
           alarmMinute = 59;
-          hours--;
-          if (hours < 0) {
-            hours = 23;
+          alarmHour--;
+          if (alarmHour < 0) {
+            alarmHour = 23;
           }
         }
-        
       }
       while (digitalRead(decrementButtonPin) == LOW); // Wait for release
     }
@@ -212,10 +216,10 @@ void checkButtons(int &hours, int &minutes) {
   }
 }
 
-// Function to trigger the alarm 
+
 void triggerAlarm(int hours, int minutes) { // Receive hours and minutes
   Serial.println("ALARM!");
-  
+
   for (int i = 0; i < 5; i++) { // Blink 5 times
     display.clear(); // Turn off the display
     delay(250);
@@ -224,7 +228,9 @@ void triggerAlarm(int hours, int minutes) { // Receive hours and minutes
     delay(250);
   }
 
+  
   myServo.write(90); // Move to 90 degrees
   delay(1000);
   myServo.write(0);  // Move back to 0 degrees
 }
+
