@@ -7,6 +7,7 @@
 const int CLK = 6;  
 const int DIO = 7; 
 const int servoPin = 8;
+const int buzzerPin = 5;  // Buzzer connected to D5
 const int setAlarmButton = 13;
 const int incrementButton = A0;
 const int decrementButton = A1;
@@ -44,6 +45,7 @@ void setup() {
   pinMode(setAlarmButton, INPUT_PULLUP);
   pinMode(incrementButton, INPUT_PULLUP);
   pinMode(decrementButton, INPUT_PULLUP);
+  pinMode(buzzerPin, OUTPUT); // Set buzzer pin as output
 }
 
 void loop() {
@@ -77,6 +79,9 @@ void loop() {
 
 void handleButtons() {
   if (digitalRead(setAlarmButton) == LOW && millis() - lastDebounce > debounceDelay) {
+    DateTime now = rtc.now();
+    alarmHour = now.hour();       // Set initial alarm time to current time
+    alarmMinute = now.minute();
     settingAlarm = !settingAlarm;
     lastInteraction = millis();
     Serial.println(settingAlarm ? "Entering alarm set mode..." : "Exiting alarm set mode.");
@@ -122,12 +127,16 @@ void showAlarmTime() {
 
 void triggerAlarm() {
   Serial.println("ALARM!");
+
   for (int i = 0; i < 5; i++) {
+    tone(buzzerPin, 1000); // Start buzzer
     display.clear();
     delay(250);
     display.showNumberDec(alarmHour * 100 + alarmMinute, true);
     delay(250);
   }
+
+  noTone(buzzerPin); // Stop buzzer
 
   myServo.write(90);
   delay(1000);
